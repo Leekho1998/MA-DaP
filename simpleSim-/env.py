@@ -579,7 +579,8 @@ class SchedulingEnv(gym.Env):
         if delay == 1:
             self.timeQue[action] += task.resource_request
         next_state = self.get_state_timeDecide(task)
-        reward = self.getRewardTimeDecide(delay)
+        reward = self.getRewardTimeDecide(delay,action)
         return next_state, reward, 0
-    def getRewardTimeDecide(self,delay):
-        return 0
+    def getRewardTimeDecide(self,delay,action):
+        reward = 0.0
+        return reward

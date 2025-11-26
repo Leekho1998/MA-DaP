@@ -23,7 +23,7 @@ class DrlModel():
         self.iftraining = iftraining
         self.env = env
         self.algorithm = myDRL(algorithm_name, is_training=True, pref=pref)
-        self.algorithm_timeDecide = timeDecideDRL('PPO_Discrete', is_training=True, pref=pref)
+        self.algorithm_timeDecide = timeDecideDRL('DQN', is_training=True, pref=pref)
 
     def learn(self, episode):
         best_reward = 0

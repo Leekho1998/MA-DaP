@@ -92,7 +92,8 @@ class timeDecideDRL():
         done = False
         for i, task in enumerate(tasks_to_schedule):  # 可选的主机列表
             time_mask = np.zeros(144, dtype=bool)
-            for i in range(task.decline+1):
+            decline_limit = int(min(task.decline, 143))
+            for i in range(decline_limit+1):
                 time_mask[i] = 1
 
             if np.sum(time_mask) == 0:  # 没有可分配的主机
@@ -116,26 +117,26 @@ class timeDecideDRL():
             next_state,reward,done = env.timeDecideStep(task, delay, action)
 
 
-            ##self.agent.replay_buffer.push(state, action, reward, next_state, done, a_logprob, dw=0)
             # 1) 仍然设置预约时间
 # task.exc_time 已在你现有逻辑中设置
 
-    # 2) 打开凭证，不结算奖励
+    # 2) 结算奖励
+            self.agent.replay_buffer.push(state, action, reward, next_state, done, a_logprob, dw=0)
             t0 = int(env.current_time)
             key = id(task)
             # 注意：ppo 的 get_action 里若能返回 (action, logp, val)，就把 a_logprob 当作 logp；val 没有就填 0
-            self._vouchers[key] = _Voucher(
-                task_key=key,
-                state=state,
-                next_state=next_state,
-                action=int(action),
-                decide_time=t0,
-                baseline_slot=t0,
-                delay_slots=int(action),
-                logp=a_logprob,   # 若你的 PPO 返回的是 log_prob
-                val=0.0,
-                mask=None
-            )
+            # self._vouchers[key] = _Voucher(
+            #     task_key=key,
+            #     state=state,
+            #     next_state=next_state,
+            #     action=int(action),
+            #     decide_time=t0,
+            #     baseline_slot=t0,
+            #     delay_slots=int(action),
+            #     logp=a_logprob,   # 若你的 PPO 返回的是 log_prob
+            #     val=0.0,
+            #     mask=None
+            # )
 
     # 3) 不在这里 push 到 replay_buffer；真正开始时再推
 
