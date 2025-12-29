@@ -42,23 +42,22 @@ class DrlModel():
 
                 # 获取要调度的任务
                 tasks_to_schedule = self.env.get_tasks_to_schedule()
-                if len(tasks_to_schedule) > 0:
-                    tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule)
-                    self.algorithm_timeDecide.timeDecide(tasks_to_schedule, self.env, state)
-
-
-                tasks_to_execute = self.env.get_tasks_to_execute()
-                if len(tasks_to_execute) > 0:  # 有任务需要调度
-                    tasks_to_execute = sort_tasks(self.sort_name, tasks_to_execute) # 对任务的排序 输入是任务列表，输出是排序后的任务列表
+                # if len(tasks_to_schedule) > 0:
+                #     tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule)
+                #     self.algorithm_timeDecide.timeDecide(tasks_to_schedule, self.env, state)
+                dagQueue = self.env.toDAG(tasks_to_schedule)
+                ## dag={'job_name':[task1,task2,...],...}
+                # tasks_to_execute = self.env.get_tasks_to_execute()
+                if len(tasks_to_schedule) > 0:  # 有任务需要调度
+                    tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule) # 对任务的排序 输入是任务列表，输出是排序后的任务列表
                     # 调度并执行任务
                     # 传入的这个state没有一点作用，拿到的state也没有用
                     #time_decide
-                    state, reward, done, info = self.algorithm.placement(tasks_to_execute, self.env, state)  # 输入是排序后的任务,
-
+                    state, reward, done, info = self.algorithm.placement(tasks_to_schedule, self.env, state)  # 输入是排序后的任务,
                     assign_num += info['assign_num']
                     if assign_num % 10 == 0: # 更新衰减
                         self.algorithm.decay_epsilon()
-                        self.algorithm_timeDecide.decay_epsilon()
+                        # self.algorithm_timeDecide.decay_epsilon()
 
                     # 避免除以0
                     avg_reward = reward if info['assign_num']==0 else reward/info['assign_num']

@@ -15,7 +15,7 @@ import os
 
 # 设置模型
 # common config
-action_dim = 40  # host数量+不放置
+action_dim = 41  # host数量+不放置
 state_dim = 121 #160  # state dim
 batch_size = 128
 buffer_size=1000

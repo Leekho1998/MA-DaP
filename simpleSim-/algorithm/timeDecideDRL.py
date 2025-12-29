@@ -92,7 +92,8 @@ class timeDecideDRL():
         done = False
         for i, task in enumerate(tasks_to_schedule):  # 可选的主机列表
             time_mask = np.zeros(144, dtype=bool)
-            for i in range(task.decline+1):
+            decline_limit = int(min(task.decline, 143))  # 最多只能推迟到第144个时间片
+            for i in range(decline_limit + 1):
                 time_mask[i] = 1
 
             if np.sum(time_mask) == 0:  # 没有可分配的主机
