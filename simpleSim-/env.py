@@ -33,6 +33,7 @@ class SchedulingEnv(gym.Env):
         self.oldEnergyConsumptionPerHost = np.zeros(len(hosts))
         self.tasks = tasks
         self.hosts = hosts
+        self.task_dict = {task.task_name: task for task in self.tasks}
 
         self.maxResource = np.array([0.0,0.0,0.0])
         for host in hosts:
@@ -583,3 +584,26 @@ class SchedulingEnv(gym.Env):
         return next_state, reward, 0
     def getRewardTimeDecide(self,delay):
         return 0
+
+    def toDAG(self, queueued_tasks):
+        # 将当前任务列表转换为DAG表示
+        dag = {}
+        for task in queueued_tasks:
+            if task.dag_id not in dag:
+                dag[task.dag_id] = []
+            dag[task.dag_id].append(task)
+        return dag
+    
+    def isqualified(self, tasks_to_schedule):
+        qualified = []
+        flag = True
+        for task in tasks_to_schedule:
+            for parent_name in task.parent_tasks:
+                parent_task = self.task_dict[parent_name]
+                if not parent_task.is_completed(self.current_time):
+                    flag = False
+                    break
+            if flag:
+                qualified.append(task)
+            flag = True
+        return qualified

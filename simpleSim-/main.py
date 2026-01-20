@@ -83,7 +83,7 @@ if __name__ == '__main__':
                         help='Method to sort tasks before placement.')
     parser.add_argument('--workload_path', type=str,
                         default='./dataset/workload_ali2025.csv',
-                        choices=['./dataset/workload.csv', './dataset/workload_ali2025.csv','./dataset/workload_decline.csv','./dataset/output.csv'],
+                        choices=['./dataset/workload.csv', './dataset/workload_ali2025.csv','./dataset/workload_decline.csv','./dataset/output.csv', './dataset/dag_tasks.csv'],
                         help='Path to workload dataset.')
     parser.add_argument('--host_path', type=str,
                         default='./dataset/host.csv',

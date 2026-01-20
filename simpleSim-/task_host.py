@@ -16,11 +16,13 @@ class Job:
 
 class Task:
     total_tasks = 0
-    def __init__(self, job, job_name, submit_time, task_name, task_duration, instance_num, plan_cpu, plan_mem, plan_gpu, gpu_type, communicate_count, communicate_size,decline):
+    def __init__(self, job,job_name,dag_id, submit_time, task_name, parent_tasks,task_duration, instance_num, plan_cpu, plan_mem, plan_gpu, gpu_type, communicate_count, communicate_size,decline):
         self.job_name = job_name
         self.job = job
+        self.dag_id = dag_id
         self.submit_time = submit_time
         self.task_name = task_name
+        self.parent_tasks =  parent_tasks.split(",") if isinstance(parent_tasks, str) else []
         self.instance_num = instance_num
         self.task_duration = task_duration
         self.plan_cpu = plan_cpu
