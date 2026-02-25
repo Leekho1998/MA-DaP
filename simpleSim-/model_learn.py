@@ -50,7 +50,10 @@ class DrlModel():
                 # tasks_to_execute = self.env.get_tasks_to_execute()
 
                 tasks_to_schedule = self.env.isqualified(tasks_to_schedule)
-                
+                if len(tasks_to_schedule) > 0:
+                    tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule)
+                    self.algorithm_timeDecide.timeDecide(tasks_to_schedule, self.env, state)
+                tasks_to_schedule = self.env.get_tasks_to_execute()
                 if len(tasks_to_schedule) > 0:  # 有任务需要调度
                     tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule) # 对任务的排序 输入是任务列表，输出是排序后的任务列表
                     # 调度并执行任务

@@ -16,7 +16,7 @@ import os
 # 设置模型
 # common config
 action_dim = 144  # 一天
-state_dim = 40 * 3 + 1 + 144 * 3 + 3 + 1
+state_dim = 40 * 3 + 1 + 144 * 3 + 3 + 1 + 150
 # 160  # state dim
 batch_size = 128
 buffer_size = 1000

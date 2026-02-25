@@ -18,6 +18,9 @@ max_avg_energy = 5000 # 用来归一化
 max_run_time = 100 # 用来归一化  200
 max_avg_run_time = 30 # 用来归一化 30
 max_avg_wait_time = 10 # 用来归一化 30
+NMAX = 10
+NODE_F = 4  # duration/cpu/mem/gpu
+DAG_DIM = NMAX*NODE_F + NMAX*NMAX + NMAX  # 150
 
 random.seed(42)
 
@@ -111,6 +114,8 @@ class SchedulingEnv(gym.Env):
         reward = 0
         state = self.get_no_task_state(self.hosts, [1]*len(self.hosts))
         info = {}
+        self.timeQue = self.timeQue[1:]  # 队列前移
+        self.timeQue = np.vstack([self.timeQue, np.zeros((1,3))])  # 队列末尾添加空元素
         return state, reward, done, info  # 这个函数的这四个值不会影响任何东西，但我还是返回了，相当于返回了一些可供参考的信息吧
 
     def schedule_step(self, task, chosen_host, host_mask, action):
@@ -450,11 +455,58 @@ class SchedulingEnv(gym.Env):
             feature.extend(self.normalize3(que))
         taskfeature = self.normalize3(task.resource_request)
         feature.extend(taskfeature)
-        f = 0.0
         f = task.decline/144
         feature.extend([f])
-        return feature
+        dag_block = self.build_dag_block(task, Nmax=10, F=4)
+        feature.extend(dag_block.tolist())
 
+        return feature
+    
+
+    def _safe_float(self, x, default=0.0):
+        try:
+            return float(x)
+        except Exception:
+            return float(default)
+
+    def build_dag_block(self, task, Nmax=NMAX, F=NODE_F):
+
+        # 1) 找到同一 dag_id 的所有任务
+        dag_tasks = [t for t in self.tasks if getattr(t, "dag_id", None) == task.dag_id]
+
+        # 2) 固定顺序（保证可复现）：按 task_name 排
+        dag_tasks = sorted(dag_tasks, key=lambda x: x.task_name)
+
+        # 3) 截断到 Nmax
+        dag_tasks = dag_tasks[:Nmax]
+        n = len(dag_tasks)
+
+        name2i = {t.task_name: i for i, t in enumerate(dag_tasks)}
+
+        # 4) 节点特征 X
+        X = np.zeros((Nmax, F), dtype=np.float32)
+        for i, t in enumerate(dag_tasks):
+            X[i, 0] = self._safe_float(t.task_duration)
+            X[i, 1] = self._safe_float(t.plan_cpu)
+            X[i, 2] = self._safe_float(t.plan_mem)
+            X[i, 3] = self._safe_float(t.plan_gpu)
+
+        # 5) 邻接矩阵 A（parent->child）
+        A = np.zeros((Nmax, Nmax), dtype=np.float32)
+        for child in dag_tasks:
+            j = name2i[child.task_name]
+            for p_name in getattr(child, "parent_tasks", []):
+                if p_name in name2i:
+                    i = name2i[p_name]
+                    A[i, j] = 1.0
+
+        # 6) mask
+        mask = np.zeros((Nmax,), dtype=np.float32)
+        mask[:n] = 1.0
+
+        # 7) flatten
+        dag_block = np.concatenate([X.reshape(-1), A.reshape(-1), mask], axis=0)  # length=150
+        return dag_block
 
 
     def normalize_timeDecide(self, feature):

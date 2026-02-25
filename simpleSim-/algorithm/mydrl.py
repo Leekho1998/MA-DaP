@@ -27,7 +27,7 @@ algo_agents = {
     # 'TD3': TD3Agent(state_dim=state_dim, action_dim=action_dim, batch_size=batch_size, max_size=buffer_size),
     # 'A2C': A2CAgent(state_dim=state_dim, action_dim=action_dim, batch_size=5, max_size=5, load_file='./saved_model/a2c_model/'),  # a2c是一个一个训练的
     # 'DDPG': DDPGAgent(state_dim=state_dim, action_dim=action_dim, batch_size=batch_size, max_size=buffer_size),
-    'PPO_Discrete': PPO_discrete(state_dim=state_dim, action_dim=action_dim, batch_size=batch_size, max_size=buffer_size, load_file='./saved_model/ppo_discrete_model/'),# ppo的buffer_size=batch_size且训完就重置
+    'PPO_Discrete': PPO_discrete(state_dim=state_dim+150, action_dim=action_dim, batch_size=batch_size, max_size=buffer_size, load_file='./saved_model/ppo_discrete_model/'),# ppo的buffer_size=batch_size且训完就重置
     # 'PPO': PPOAgent(state_dim=state_dim, action_dim=action_dim, batch_size=batch_size),
 }
 

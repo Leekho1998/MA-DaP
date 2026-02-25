@@ -10,7 +10,10 @@ from torch.distributions import Categorical
 from util.replay_buffers import BasicBuffer
 from util.replay_buffers_ppo import ReplayBuffer
 
-
+NMAX = 10
+NODE_F = 4
+DAG_DIM = NMAX * NODE_F + NMAX * NMAX + NMAX   # 40 + 100 + 10 = 150
+GNN_OUT = 32
 # Trick 8: orthogonal initialization
 def orthogonal_init(layer, gain=1.0):
     nn.init.orthogonal_(layer.weight, gain=gain)
@@ -20,10 +23,21 @@ def orthogonal_init(layer, gain=1.0):
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_width=64, use_tanh=True, use_orthogonal_init=True):
         super(Actor, self).__init__()
-        self.fc1 = nn.Linear(state_dim, hidden_width)
+        assert state_dim > DAG_DIM, f"state_dim must include DAG_DIM={DAG_DIM} at the end"
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.raw_dim = state_dim - DAG_DIM
+
+        # --- GCN encoder (trainable) ---
+        self.W1 = nn.Linear(NODE_F, 64, bias=False)
+        self.W2 = nn.Linear(64, GNN_OUT, bias=False)
+
+        # --- keep your original MLP, but input dim changes ---
+        self.fc1 = nn.Linear(self.raw_dim + GNN_OUT, hidden_width)
         self.fc2 = nn.Linear(hidden_width, hidden_width)
         self.fc3 = nn.Linear(hidden_width, action_dim)
-        self.activate_func = [nn.ReLU(), nn.Tanh()][use_tanh]  # Trick10: use tanh
+        self.activate_func = [nn.ReLU(), nn.Tanh()][use_tanh]
 
         if use_orthogonal_init:
             print("------use_orthogonal_init------")
@@ -31,31 +45,110 @@ class Actor(nn.Module):
             orthogonal_init(self.fc2)
             orthogonal_init(self.fc3, gain=0.01)
 
+    def _gcn_pool(self, dag_part: torch.Tensor) -> torch.Tensor:
+        """
+        dag_part: [B, DAG_DIM] = [X(40), A(100), mask(10)]
+        return graph_emb: [B, GNN_OUT]
+        """
+        B = dag_part.size(0)
+
+        x_flat = dag_part[:, :NMAX * NODE_F]                         # [B,40]
+        a_flat = dag_part[:, NMAX * NODE_F:NMAX * NODE_F + NMAX*NMAX]# [B,100]
+        m_flat = dag_part[:, -NMAX:]                                 # [B,10]
+
+        X = x_flat.view(B, NMAX, NODE_F)                             # [B,10,4]
+        A = a_flat.view(B, NMAX, NMAX)                               # [B,10,10]
+        mask = m_flat.view(B, NMAX, 1)                               # [B,10,1]
+
+        # self-loop
+        I = torch.eye(NMAX, device=dag_part.device).unsqueeze(0).expand(B, -1, -1)
+        A_hat = A + I
+
+        # normalize: D^{-1/2} A D^{-1/2}
+        deg = A_hat.sum(dim=-1)                                      # [B,10]
+        deg_inv_sqrt = torch.pow(deg.clamp(min=1.0), -0.5)           # [B,10]
+        A_norm = A_hat * deg_inv_sqrt.unsqueeze(-1) * deg_inv_sqrt.unsqueeze(-2)
+
+        H1 = torch.relu(A_norm @ self.W1(X))                         # [B,10,64]
+        H2 = torch.relu(A_norm @ self.W2(H1))                        # [B,10,32]
+
+        # masked mean pooling
+        H2 = H2 * mask
+        denom = mask.sum(dim=1).clamp(min=1.0)                       # [B,1]
+        g = H2.sum(dim=1) / denom                                    # [B,32]
+        return g
+
     def forward(self, s):
-        s = self.activate_func(self.fc1(s))
-        s = self.activate_func(self.fc2(s))
-        a_prob = torch.softmax(self.fc3(s), dim=1)
+        # s: [B, state_dim]
+        raw = s[:, :self.raw_dim]
+        dag = s[:, self.raw_dim:]                                    # [B,150]
+        g = self._gcn_pool(dag)                                      # [B,32]
+
+        z = torch.cat([raw, g], dim=-1)                              # [B, raw+32]
+        z = self.activate_func(self.fc1(z))
+        z = self.activate_func(self.fc2(z))
+        a_prob = torch.softmax(self.fc3(z), dim=1)
         return a_prob
 
 
 class Critic(nn.Module):
     def __init__(self, state_dim, hidden_width=64, use_tanh=True, use_orthogonal_init=True):
         super(Critic, self).__init__()
-        self.fc1 = nn.Linear(state_dim, hidden_width)
+        assert state_dim > DAG_DIM, f"state_dim must include DAG_DIM={DAG_DIM} at the end"
+
+        self.state_dim = state_dim
+        self.raw_dim = state_dim - DAG_DIM
+
+        # --- GCN encoder (trainable) ---
+        self.W1 = nn.Linear(NODE_F, 64, bias=False)
+        self.W2 = nn.Linear(64, GNN_OUT, bias=False)
+
+        # --- keep your original MLP, but input dim changes ---
+        self.fc1 = nn.Linear(self.raw_dim + GNN_OUT, hidden_width)
         self.fc2 = nn.Linear(hidden_width, hidden_width)
         self.fc3 = nn.Linear(hidden_width, 1)
-        self.activate_func = [nn.ReLU(), nn.Tanh()][use_tanh]  # Trick10: use tanh
+        self.activate_func = [nn.ReLU(), nn.Tanh()][use_tanh]
 
         if use_orthogonal_init:
-            # print("------use_orthogonal_init------")
             orthogonal_init(self.fc1)
             orthogonal_init(self.fc2)
             orthogonal_init(self.fc3)
 
+    def _gcn_pool(self, dag_part: torch.Tensor) -> torch.Tensor:
+        B = dag_part.size(0)
+
+        x_flat = dag_part[:, :NMAX * NODE_F]
+        a_flat = dag_part[:, NMAX * NODE_F:NMAX * NODE_F + NMAX*NMAX]
+        m_flat = dag_part[:, -NMAX:]
+
+        X = x_flat.view(B, NMAX, NODE_F)
+        A = a_flat.view(B, NMAX, NMAX)
+        mask = m_flat.view(B, NMAX, 1)
+
+        I = torch.eye(NMAX, device=dag_part.device).unsqueeze(0).expand(B, -1, -1)
+        A_hat = A + I
+
+        deg = A_hat.sum(dim=-1)
+        deg_inv_sqrt = torch.pow(deg.clamp(min=1.0), -0.5)
+        A_norm = A_hat * deg_inv_sqrt.unsqueeze(-1) * deg_inv_sqrt.unsqueeze(-2)
+
+        H1 = torch.relu(A_norm @ self.W1(X))
+        H2 = torch.relu(A_norm @ self.W2(H1))
+
+        H2 = H2 * mask
+        denom = mask.sum(dim=1).clamp(min=1.0)
+        g = H2.sum(dim=1) / denom
+        return g
+
     def forward(self, s):
-        s = self.activate_func(self.fc1(s))
-        s = self.activate_func(self.fc2(s))
-        v_s = self.fc3(s)
+        raw = s[:, :self.raw_dim]
+        dag = s[:, self.raw_dim:]
+        g = self._gcn_pool(dag)
+
+        z = torch.cat([raw, g], dim=-1)
+        z = self.activate_func(self.fc1(z))
+        z = self.activate_func(self.fc2(z))
+        v_s = self.fc3(z)
         return v_s
 
 
