@@ -22,239 +22,202 @@ def orthogonal_init(layer, gain=1.0):
 
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_width=64, use_tanh=True, use_orthogonal_init=True):
-        super(Actor, self).__init__()
+        super().__init__()
         assert state_dim > DAG_DIM, f"state_dim must include DAG_DIM={DAG_DIM} at the end"
-
-        self.state_dim = state_dim
-        self.action_dim = action_dim
         self.raw_dim = state_dim - DAG_DIM
 
-        # --- GAT encoder (trainable) ---
-        self.W_att = nn.Linear(NODE_F, GNN_OUT, bias=False)
-        self.a_src = nn.Parameter(torch.empty(GNN_OUT))
-        self.a_dst = nn.Parameter(torch.empty(GNN_OUT))
-        nn.init.xavier_uniform_(self.W_att.weight)
-        nn.init.xavier_uniform_(self.a_src.view(1, -1))
-        nn.init.xavier_uniform_(self.a_dst.view(1, -1))
+        # ---- Forward GAT params (parents -> v) ----
+        self.Wf = nn.Linear(NODE_F, GNN_OUT, bias=False)
+        self.af_src = nn.Parameter(torch.empty(GNN_OUT))
+        self.af_dst = nn.Parameter(torch.empty(GNN_OUT))
 
-        # --- keep your original MLP, but input dim changes ---
+        # ---- Backward GAT params (children -> v) ----
+        self.Wb = nn.Linear(NODE_F, GNN_OUT, bias=False)
+        self.ab_src = nn.Parameter(torch.empty(GNN_OUT))
+        self.ab_dst = nn.Parameter(torch.empty(GNN_OUT))
+
+        # ---- Gate to fuse gf/gb ----
+        self.gate = nn.Sequential(
+            nn.Linear(GNN_OUT * 2, GNN_OUT),
+            nn.ReLU(),
+            nn.Linear(GNN_OUT, 1),
+            nn.Sigmoid()
+        )
+
+        # ---- Your original MLP (input dim changed: raw + fused_graph_emb) ----
         self.fc1 = nn.Linear(self.raw_dim + GNN_OUT, hidden_width)
         self.fc2 = nn.Linear(hidden_width, hidden_width)
         self.fc3 = nn.Linear(hidden_width, action_dim)
         self.activate_func = [nn.ReLU(), nn.Tanh()][use_tanh]
 
+        # init
+        nn.init.xavier_uniform_(self.Wf.weight)
+        nn.init.xavier_uniform_(self.Wb.weight)
+        nn.init.xavier_uniform_(self.af_src.view(1, -1))
+        nn.init.xavier_uniform_(self.af_dst.view(1, -1))
+        nn.init.xavier_uniform_(self.ab_src.view(1, -1))
+        nn.init.xavier_uniform_(self.ab_dst.view(1, -1))
+
         if use_orthogonal_init:
-            print("------use_orthogonal_init------")
             orthogonal_init(self.fc1)
             orthogonal_init(self.fc2)
             orthogonal_init(self.fc3, gain=0.01)
-    def _gat_pool(self, dag_part: torch.Tensor) -> torch.Tensor:
-        """
-        dag_part: [B, 150] = [X(40), A(100), mask(10)]
-        return graph_emb: [B, GNN_OUT]
-        """
+
+    def _parse_dag(self, dag_part):
         B = dag_part.size(0)
+        x_flat = dag_part[:, :NMAX*NODE_F]
+        a_flat = dag_part[:, NMAX*NODE_F:NMAX*NODE_F + NMAX*NMAX]
+        m_flat = dag_part[:, -NMAX:]
 
-        x_flat = dag_part[:, :NMAX * NODE_F]                          # [B,40]
-        a_flat = dag_part[:, NMAX * NODE_F:NMAX * NODE_F + NMAX*NMAX] # [B,100]
-        m_flat = dag_part[:, -NMAX:]                                  # [B,10]
-
-        X = x_flat.view(B, NMAX, NODE_F)                              # [B,N,F]
-        A = a_flat.view(B, NMAX, NMAX)                                # [B,N,N] (parent->child)
-        mask = m_flat.view(B, NMAX, 1)                                # [B,N,1]
-
+        X = x_flat.view(B, NMAX, NODE_F)        # [B,N,F]
+        A = a_flat.view(B, NMAX, NMAX)          # [B,N,N] parent->child
+        mask = m_flat.view(B, NMAX, 1)          # [B,N,1]
         # self-loop
         I = torch.eye(NMAX, device=dag_part.device).unsqueeze(0).expand(B, -1, -1)
-        A_hat = (A + I).clamp(max=1.0)                                # edges matrix 0/1
+        A_hat = (A + I).clamp(max=1.0)
+        return X, A_hat, mask
 
-        # --- GAT core ---
-        # 1) linear projection
-        Wh = self.W_att(X)                                            # [B,N,O]
+    def _gat_one_pass(self, X, A_hat, mask, W, a_src, a_dst):
+        """
+        Compute node outputs H: [B,N,O] using adjacency A_hat (i->j).
+        We normalize over incoming neighbors for each target j (softmax over i).
+        """
+        B = X.size(0)
+        Wh = W(X)                                # [B,N,O]
 
-        # 2) attention logits e_ij for edges i->j
-        #    e_ij = LeakyReLU( a_src^T Wh_i + a_dst^T Wh_j )
-        # compute f_src[i]=a_src^T Wh_i, f_dst[j]=a_dst^T Wh_j
-        f_src = (Wh * self.a_src.view(1, 1, -1)).sum(-1)              # [B,N]
-        f_dst = (Wh * self.a_dst.view(1, 1, -1)).sum(-1)              # [B,N]
+        f_src = (Wh * a_src.view(1, 1, -1)).sum(-1)  # [B,N]
+        f_dst = (Wh * a_dst.view(1, 1, -1)).sum(-1)  # [B,N]
+        e = f_src.unsqueeze(2) + f_dst.unsqueeze(1)  # [B,N,N]
+        e = F.leaky_relu(e, 0.2)
 
-        # broadcast to [B,N,N]: src along dim=1, dst along dim=2
-        e = f_src.unsqueeze(2) + f_dst.unsqueeze(1)                   # [B,N,N]
-        e = torch.nn.functional.leaky_relu(e, negative_slope=0.2)
-
-        # 3) mask non-edges: set to very negative so softmax -> 0
-        neg_inf = torch.tensor(-1e9, device=dag_part.device)
+        neg_inf = torch.tensor(-1e9, device=X.device)
         e = torch.where(A_hat > 0, e, neg_inf)
 
-        # 4) normalize over incoming neighbors for each target j
-        #    alpha_ij softmax over i (dim=1)
-        alpha = torch.softmax(e, dim=1)                                # [B,N,N]
+        alpha = torch.softmax(e, dim=1)          # incoming softmax over i
+        H = torch.matmul(alpha.transpose(1, 2), Wh)  # [B,N,O]
+        H = torch.relu(H)
 
-        # 5) aggregate: h'_j = sum_i alpha_ij * Wh_i
-        H = torch.matmul(alpha.transpose(1, 2), Wh)                    # [B,N,O]
+        # mask out padded nodes for later pooling
+        H = H * mask
+        return H
 
-        # --- masked mean pooling over valid nodes ---
-        H = torch.relu(H) * mask                                       # [B,N,O]
-        denom = mask.sum(dim=1).clamp(min=1.0)                         # [B,1]
-        g = H.sum(dim=1) / denom                                       # [B,O]
+    def _masked_pool(self, H, mask):
+        denom = mask.sum(dim=1).clamp(min=1.0)   # [B,1]
+        g = H.sum(dim=1) / denom                 # [B,O]
         return g
-    def _gcn_pool(self, dag_part: torch.Tensor) -> torch.Tensor:
-        """
-        dag_part: [B, DAG_DIM] = [X(40), A(100), mask(10)]
-        return graph_emb: [B, GNN_OUT]
-        """
-        B = dag_part.size(0)
 
-        x_flat = dag_part[:, :NMAX * NODE_F]                         # [B,40]
-        a_flat = dag_part[:, NMAX * NODE_F:NMAX * NODE_F + NMAX*NMAX]# [B,100]
-        m_flat = dag_part[:, -NMAX:]                                 # [B,10]
+    def _bi_encoder(self, dag_part):
+        X, A_hat, mask = self._parse_dag(dag_part)
 
-        X = x_flat.view(B, NMAX, NODE_F)                             # [B,10,4]
-        A = a_flat.view(B, NMAX, NMAX)                               # [B,10,10]
-        mask = m_flat.view(B, NMAX, 1)                               # [B,10,1]
+        # Forward: parents -> v uses A_hat (parent->child)
+        Hf = self._gat_one_pass(X, A_hat, mask, self.Wf, self.af_src, self.af_dst)
+        gf = self._masked_pool(Hf, mask)         # [B,O]
 
-        # self-loop
-        I = torch.eye(NMAX, device=dag_part.device).unsqueeze(0).expand(B, -1, -1)
-        A_hat = A + I
+        # Backward: children -> v uses A_hat^T (child->parent)
+        A_rev = A_hat.transpose(1, 2)
+        Hb = self._gat_one_pass(X, A_rev, mask, self.Wb, self.ab_src, self.ab_dst)
+        gb = self._masked_pool(Hb, mask)         # [B,O]
 
-        # normalize: D^{-1/2} A D^{-1/2}
-        deg = A_hat.sum(dim=-1)                                      # [B,10]
-        deg_inv_sqrt = torch.pow(deg.clamp(min=1.0), -0.5)           # [B,10]
-        A_norm = A_hat * deg_inv_sqrt.unsqueeze(-1) * deg_inv_sqrt.unsqueeze(-2)
-
-        H1 = torch.relu(A_norm @ self.W1(X))                         # [B,10,64]
-        H2 = torch.relu(A_norm @ self.W2(H1))                        # [B,10,32]
-
-        # masked mean pooling
-        H2 = H2 * mask
-        denom = mask.sum(dim=1).clamp(min=1.0)                       # [B,1]
-        g = H2.sum(dim=1) / denom                                    # [B,32]
+        # Gate fuse
+        gate = self.gate(torch.cat([gf, gb], dim=-1))  # [B,1]
+        g = gate * gf + (1 - gate) * gb
         return g
 
     def forward(self, s):
-        # s: [B, state_dim]
         raw = s[:, :self.raw_dim]
-        dag = s[:, self.raw_dim:]                                    # [B,150]
-        g = self._gat_pool(dag)                                      # [B,32]
+        dag = s[:, self.raw_dim:]                # last 150 dims
+        g = self._bi_encoder(dag)
 
-        z = torch.cat([raw, g], dim=-1)                              # [B, raw+32]
+        z = torch.cat([raw, g], dim=-1)
         z = self.activate_func(self.fc1(z))
         z = self.activate_func(self.fc2(z))
         a_prob = torch.softmax(self.fc3(z), dim=1)
         return a_prob
 
-
 class Critic(nn.Module):
     def __init__(self, state_dim, hidden_width=64, use_tanh=True, use_orthogonal_init=True):
-        super(Critic, self).__init__()
+        super().__init__()
         assert state_dim > DAG_DIM, f"state_dim must include DAG_DIM={DAG_DIM} at the end"
-
-        self.state_dim = state_dim
         self.raw_dim = state_dim - DAG_DIM
 
-        # --- GAT encoder (trainable) ---
-        self.W_att = nn.Linear(NODE_F, GNN_OUT, bias=False)
-        self.a_src = nn.Parameter(torch.empty(GNN_OUT))
-        self.a_dst = nn.Parameter(torch.empty(GNN_OUT))
-        nn.init.xavier_uniform_(self.W_att.weight)
-        nn.init.xavier_uniform_(self.a_src.view(1, -1))
-        nn.init.xavier_uniform_(self.a_dst.view(1, -1))
+        self.Wf = nn.Linear(NODE_F, GNN_OUT, bias=False)
+        self.af_src = nn.Parameter(torch.empty(GNN_OUT))
+        self.af_dst = nn.Parameter(torch.empty(GNN_OUT))
 
-        # --- keep your original MLP, but input dim changes ---
+        self.Wb = nn.Linear(NODE_F, GNN_OUT, bias=False)
+        self.ab_src = nn.Parameter(torch.empty(GNN_OUT))
+        self.ab_dst = nn.Parameter(torch.empty(GNN_OUT))
+
+        self.gate = nn.Sequential(
+            nn.Linear(GNN_OUT * 2, GNN_OUT),
+            nn.ReLU(),
+            nn.Linear(GNN_OUT, 1),
+            nn.Sigmoid()
+        )
+
         self.fc1 = nn.Linear(self.raw_dim + GNN_OUT, hidden_width)
         self.fc2 = nn.Linear(hidden_width, hidden_width)
         self.fc3 = nn.Linear(hidden_width, 1)
         self.activate_func = [nn.ReLU(), nn.Tanh()][use_tanh]
 
+        nn.init.xavier_uniform_(self.Wf.weight)
+        nn.init.xavier_uniform_(self.Wb.weight)
+        nn.init.xavier_uniform_(self.af_src.view(1, -1))
+        nn.init.xavier_uniform_(self.af_dst.view(1, -1))
+        nn.init.xavier_uniform_(self.ab_src.view(1, -1))
+        nn.init.xavier_uniform_(self.ab_dst.view(1, -1))
+
         if use_orthogonal_init:
             orthogonal_init(self.fc1)
             orthogonal_init(self.fc2)
             orthogonal_init(self.fc3)
-    def _gat_pool(self, dag_part: torch.Tensor) -> torch.Tensor:
-        """
-        dag_part: [B, 150] = [X(40), A(100), mask(10)]
-        return graph_emb: [B, GNN_OUT]
-        """
+
+    def _parse_dag(self, dag_part):
         B = dag_part.size(0)
-
-        x_flat = dag_part[:, :NMAX * NODE_F]                          # [B,40]
-        a_flat = dag_part[:, NMAX * NODE_F:NMAX * NODE_F + NMAX*NMAX] # [B,100]
-        m_flat = dag_part[:, -NMAX:]                                  # [B,10]
-
-        X = x_flat.view(B, NMAX, NODE_F)                              # [B,N,F]
-        A = a_flat.view(B, NMAX, NMAX)                                # [B,N,N] (parent->child)
-        mask = m_flat.view(B, NMAX, 1)                                # [B,N,1]
-
-        # self-loop
-        I = torch.eye(NMAX, device=dag_part.device).unsqueeze(0).expand(B, -1, -1)
-        A_hat = (A + I).clamp(max=1.0)                                # edges matrix 0/1
-
-        # --- GAT core ---
-        # 1) linear projection
-        Wh = self.W_att(X)                                            # [B,N,O]
-
-        # 2) attention logits e_ij for edges i->j
-        #    e_ij = LeakyReLU( a_src^T Wh_i + a_dst^T Wh_j )
-        # compute f_src[i]=a_src^T Wh_i, f_dst[j]=a_dst^T Wh_j
-        f_src = (Wh * self.a_src.view(1, 1, -1)).sum(-1)              # [B,N]
-        f_dst = (Wh * self.a_dst.view(1, 1, -1)).sum(-1)              # [B,N]
-
-        # broadcast to [B,N,N]: src along dim=1, dst along dim=2
-        e = f_src.unsqueeze(2) + f_dst.unsqueeze(1)                   # [B,N,N]
-        e = torch.nn.functional.leaky_relu(e, negative_slope=0.2)
-
-        # 3) mask non-edges: set to very negative so softmax -> 0
-        neg_inf = torch.tensor(-1e9, device=dag_part.device)
-        e = torch.where(A_hat > 0, e, neg_inf)
-
-        # 4) normalize over incoming neighbors for each target j
-        #    alpha_ij softmax over i (dim=1)
-        alpha = torch.softmax(e, dim=1)                                # [B,N,N]
-
-        # 5) aggregate: h'_j = sum_i alpha_ij * Wh_i
-        H = torch.matmul(alpha.transpose(1, 2), Wh)                    # [B,N,O]
-
-        # --- masked mean pooling over valid nodes ---
-        H = torch.relu(H) * mask                                       # [B,N,O]
-        denom = mask.sum(dim=1).clamp(min=1.0)                         # [B,1]
-        g = H.sum(dim=1) / denom                                       # [B,O]
-        return g
-    def _gcn_pool(self, dag_part: torch.Tensor) -> torch.Tensor:
-        B = dag_part.size(0)
-
-        x_flat = dag_part[:, :NMAX * NODE_F]
-        a_flat = dag_part[:, NMAX * NODE_F:NMAX * NODE_F + NMAX*NMAX]
+        x_flat = dag_part[:, :NMAX*NODE_F]
+        a_flat = dag_part[:, NMAX*NODE_F:NMAX*NODE_F + NMAX*NMAX]
         m_flat = dag_part[:, -NMAX:]
-
         X = x_flat.view(B, NMAX, NODE_F)
         A = a_flat.view(B, NMAX, NMAX)
         mask = m_flat.view(B, NMAX, 1)
-
         I = torch.eye(NMAX, device=dag_part.device).unsqueeze(0).expand(B, -1, -1)
-        A_hat = A + I
+        A_hat = (A + I).clamp(max=1.0)
+        return X, A_hat, mask
 
-        deg = A_hat.sum(dim=-1)
-        deg_inv_sqrt = torch.pow(deg.clamp(min=1.0), -0.5)
-        A_norm = A_hat * deg_inv_sqrt.unsqueeze(-1) * deg_inv_sqrt.unsqueeze(-2)
+    def _gat_one_pass(self, X, A_hat, mask, W, a_src, a_dst):
+        Wh = W(X)
+        f_src = (Wh * a_src.view(1, 1, -1)).sum(-1)
+        f_dst = (Wh * a_dst.view(1, 1, -1)).sum(-1)
+        e = F.leaky_relu(f_src.unsqueeze(2) + f_dst.unsqueeze(1), 0.2)
+        neg_inf = torch.tensor(-1e9, device=X.device)
+        e = torch.where(A_hat > 0, e, neg_inf)
+        alpha = torch.softmax(e, dim=1)
+        H = torch.matmul(alpha.transpose(1, 2), Wh)
+        H = torch.relu(H) * mask
+        return H
 
-        H1 = torch.relu(A_norm @ self.W1(X))
-        H2 = torch.relu(A_norm @ self.W2(H1))
-
-        H2 = H2 * mask
+    def _masked_pool(self, H, mask):
         denom = mask.sum(dim=1).clamp(min=1.0)
-        g = H2.sum(dim=1) / denom
-        return g
+        return H.sum(dim=1) / denom
+
+    def _bi_encoder(self, dag_part):
+        X, A_hat, mask = self._parse_dag(dag_part)
+        Hf = self._gat_one_pass(X, A_hat, mask, self.Wf, self.af_src, self.af_dst)
+        gf = self._masked_pool(Hf, mask)
+        A_rev = A_hat.transpose(1, 2)
+        Hb = self._gat_one_pass(X, A_rev, mask, self.Wb, self.ab_src, self.ab_dst)
+        gb = self._masked_pool(Hb, mask)
+        gate = self.gate(torch.cat([gf, gb], dim=-1))
+        return gate * gf + (1 - gate) * gb
 
     def forward(self, s):
         raw = s[:, :self.raw_dim]
         dag = s[:, self.raw_dim:]
-        g = self._gat_pool(dag)
-
+        g = self._bi_encoder(dag)
         z = torch.cat([raw, g], dim=-1)
         z = self.activate_func(self.fc1(z))
         z = self.activate_func(self.fc2(z))
-        v_s = self.fc3(z)
-        return v_s
-
+        return self.fc3(z)
 
 class PPO_discrete:
     def __init__(self, state_dim, action_dim, max_size=1000, batch_size=128, load_file='./sim/saved_model/ppo_discrete_model/'):
