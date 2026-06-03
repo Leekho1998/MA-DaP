@@ -5,6 +5,7 @@ from tqdm import tqdm
 from algorithm.mydrl import myDRL
 from algorithm.timeDecideDRL import timeDecideDRL
 from algorithm.heuristic_algo import FirstFit, RoundRobin, PerformenceFirst, RandomSchedule
+from algorithm.gp_marl import GPMARL
 from sort_algo import sort_tasks
 
 # 启发式调度算法
@@ -13,7 +14,8 @@ HEURISTIC_DICT = {
     'RoundRobin': RoundRobin(),
     'PerformenceFirst': PerformenceFirst(ifreverse=True),
     'RandomSchedule': RandomSchedule(),
-    'PerformenceLast': PerformenceFirst(ifreverse=False)
+    'PerformenceLast': PerformenceFirst(ifreverse=False),
+    'GP-MARL': GPMARL(),
 }
 
 class DrlModel():

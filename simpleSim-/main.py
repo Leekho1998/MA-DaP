@@ -12,6 +12,19 @@ from env import SchedulingEnv
 from model_learn import DrlModel, HeuristicModel, HEURISTIC_DICT
 from task_host import Task, Host, Job
 
+TASK_COLUMNS = [
+    'job_name', 'submit_time', 'task_name', 'task_duration', 'instance_num',
+    'plan_cpu', 'plan_mem', 'plan_gpu', 'gpu_type', 'communicate_count',
+    'communicate_size', 'decline'
+]
+TASK_DEFAULTS = {
+    'instance_num': 1,
+    'gpu_type': 'MISC',
+    'communicate_count': 0,
+    'communicate_size': 0,
+    'decline': 72,
+}
+
 # 环境py38torch
 
 def main(args):
@@ -28,13 +41,16 @@ def main(args):
     host_df = pd.read_csv(args.host_path)
 
     # 创建任务和主机对象
+    Task.total_tasks = 0
+    Job.total_jobs = 0
     hosts = [Host(host_id=i, **row.to_dict()) for i, (_, row) in enumerate(host_df.iterrows())]
     job_names = workload_df['job_name'].unique()
     jobs = {job_name: Job(job_name) for job_name in job_names}
     tasks = []
     for _, row in workload_df.iterrows():
         job = jobs[row['job_name']]
-        task = Task(job, **row.to_dict())
+        task_args = {column: row[column] if column in row else TASK_DEFAULTS.get(column) for column in TASK_COLUMNS}
+        task = Task(job, **task_args)
         tasks.append(task)
         job.add_task(task)
 
@@ -69,9 +85,10 @@ if __name__ == '__main__':
     """
     parser = argparse.ArgumentParser(description='Schedule System')
     parser.add_argument('--algorithm_name', type=str,
-                        default='DQN',
+                        default='GP-MARL',
                         choices=['DQN', 'SAC', 'PPO_Discrete',
-                                 'FirstFit', 'RoundRobin', 'PerformenceFirst', 'PerformenceLast', 'RandomSchedule'],  
+                                 'FirstFit', 'RoundRobin', 'PerformenceFirst', 'PerformenceLast', 'RandomSchedule',
+                                 'GP-MARL'],
                         help='Name of the algorithm.')  
     parser.add_argument('--reward_name', type=str,
                         default='et_balance',
@@ -82,11 +99,14 @@ if __name__ == '__main__':
                         choices=['FirstSubmit', 'LongFirst', 'ShortFirst'],
                         help='Method to sort tasks before placement.')
     parser.add_argument('--workload_path', type=str,
-                        default='./dataset/workload_ali2025.csv',
-                        choices=['./dataset/workload.csv', './dataset/workload_ali2025.csv','./dataset/workload_decline.csv','./dataset/output.csv'],
+                        default='./dataset/output.csv',
+                        choices=['./dataset/workload.csv', './dataset/workload_ali2025.csv','./dataset/workload_decline.csv','./dataset/output.csv',
+                                 './dataset/google.csv',
+                                 './dataset/sim_arrival_2.csv', './dataset/sim_arrival_4.csv',
+                                 './dataset/sim_arrival_8.csv', './dataset/sim_arrival_10.csv'],
                         help='Path to workload dataset.')
     parser.add_argument('--host_path', type=str,
-                        default='./dataset/host.csv',
+                        default='./dataset/host_same.csv',
                         help='Path to host dataset.')
     parser.add_argument('--log_path', type=str,
                         default='./log/',
