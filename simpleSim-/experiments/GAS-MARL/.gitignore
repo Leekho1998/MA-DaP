@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+result.csv
+result_heuristics.csv
+MARL_*.csv
+Maskable*.csv
+*/MARL/
+*/MaskablePPO/
