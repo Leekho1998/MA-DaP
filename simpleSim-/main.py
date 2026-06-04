@@ -103,7 +103,7 @@ if __name__ == '__main__':
                         ],
                         help='Path to workload dataset.')
     parser.add_argument('--host_path', type=str,
-                        default='./dataset/host.csv',
+                        default='./dataset/host_same.csv',
                         help='Path to host dataset.')
     parser.add_argument('--log_path', type=str,
                         default='./log/',
