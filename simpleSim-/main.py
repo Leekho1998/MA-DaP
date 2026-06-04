@@ -94,7 +94,9 @@ if __name__ == '__main__':
     parser.add_argument('--workload_path', type=str,
                         default='./dataset/output.csv',
                         choices=['./dataset/workload.csv', './dataset/workload_ali2025.csv','./dataset/workload_decline.csv','./dataset/output.csv',
-                                 './dataset/google.csv'],
+                                 './dataset/google.csv',
+                                 './dataset/sim_arrival_2.csv', './dataset/sim_arrival_4.csv',
+                                 './dataset/sim_arrival_8.csv', './dataset/sim_arrival_10.csv'],
                         help='Path to workload dataset.')
     parser.add_argument('--host_path', type=str,
                         default='./dataset/host_same.csv',

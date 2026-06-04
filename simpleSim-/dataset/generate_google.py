@@ -26,6 +26,10 @@ OUTPUT_COLUMNS = [
 ]
 
 TIME_SLOT_US = 600_000_000
+SLOTS_PER_DAY = 144
+DEFAULT_DAYS = 8
+DEFAULT_TASKS = 21000
+TRAIN_RATIO = 0.8
 HOST_CPU = 8000
 HOST_MEM = 128
 HOST_GPU = 800
@@ -45,6 +49,16 @@ def parse_mapping(value):
 def round_to(value, base, lower, upper):
     rounded = int(math.ceil(float(value) / base) * base)
     return int(np.clip(rounded, lower, upper))
+
+
+def bounded_fraction(value, rng, low=0.05, high=0.25):
+    if value is None or pd.isna(value):
+        return float(rng.uniform(low, high))
+    value = max(float(value), 0.0)
+    # Borg resource requests are normalized and often very small. Preserve
+    # relative intensity while mapping into the experiment's 5%-25% range.
+    scaled = low + min(value, high) / high * (high - low)
+    return float(np.clip(scaled, low, high))
 
 
 def first_valid_time(df):
@@ -79,7 +93,17 @@ def scan_submit_range(input_path, usecols, limit, chunksize):
     return min_time or 0, max_time or 0
 
 
-def generate_google_dataset(input_path, output_path, limit=2340, chunksize=50_000, seed=42, time_slots=432):
+def write_train_test_splits(output_path):
+    df = pd.read_csv(output_path)
+    split = int(len(df) * TRAIN_RATIO)
+    train_path = output_path.with_name(output_path.stem + "_train.csv")
+    test_path = output_path.with_name(output_path.stem + "_test.csv")
+    df.iloc[:split].to_csv(train_path, index=False)
+    df.iloc[split:].to_csv(test_path, index=False)
+    return train_path, test_path
+
+
+def generate_google_dataset(input_path, output_path, limit=DEFAULT_TASKS, chunksize=50_000, seed=42, time_slots=DEFAULT_DAYS * SLOTS_PER_DAY, write_splits=True):
     rng = np.random.default_rng(seed)
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -132,10 +156,16 @@ def generate_google_dataset(input_path, output_path, limit=2340, chunksize=50_00
             continue
 
         duration_us = chunk["end_time"] - chunk["start_time"]
-        duration_steps = np.ceil(duration_us / TIME_SLOT_US)
-        fallback_duration = rng.lognormal(mean=2.2, sigma=0.45, size=len(chunk))
-        duration_steps = np.where(duration_steps.notna() & (duration_steps > 0), duration_steps, fallback_duration)
-        duration_steps = np.clip(duration_steps.astype(int), 6, 144)
+        raw_duration_steps = np.ceil(duration_us / TIME_SLOT_US)
+        fallback_duration = rng.integers(3, 25, size=len(chunk))
+        duration_steps = np.where(raw_duration_steps.notna() & (raw_duration_steps > 0), raw_duration_steps, fallback_duration)
+        # Experiment requirement: 30 minutes to 240 minutes. One env step is 10 minutes.
+        # Borg contains many sub-30-minute tasks; resample those into the required range.
+        sampled_duration = np.rint(rng.triangular(left=3, mode=8, right=24, size=len(chunk))).astype(int)
+        duration_steps = duration_steps.astype(int)
+        valid_duration = (duration_steps >= 3) & (duration_steps <= 24)
+        duration_steps = np.where(valid_duration, duration_steps, sampled_duration)
+        duration_steps = np.clip(duration_steps.astype(int), 3, 24)
 
         reqs = chunk["resource_request"].map(parse_mapping)
         avg_usage = chunk["average_usage"].map(parse_mapping)
@@ -160,15 +190,14 @@ def generate_google_dataset(input_path, output_path, limit=2340, chunksize=50_00
             if mem_frac is None:
                 mem_frac = row["assigned_memory"] if pd.notna(row["assigned_memory"]) else max_use.get("memory", avg.get("memory", 0.01))
 
-            cpus.append(round_to(max(float(cpu_frac), 0.001) * HOST_CPU, 100, 100, HOST_CPU))
-            mems.append(round_to(max(float(mem_frac), 0.001) * HOST_MEM, 1, 1, HOST_MEM))
+            cpu_pct = bounded_fraction(cpu_frac, rng)
+            mem_pct = bounded_fraction(mem_frac, rng)
+            cpus.append(round_to(cpu_pct * HOST_CPU, 100, int(HOST_CPU * 0.05), int(HOST_CPU * 0.25)))
+            mems.append(round_to(mem_pct * HOST_MEM, 1, math.ceil(HOST_MEM * 0.05), int(HOST_MEM * 0.25)))
 
             gpu_prob = 0.03 + 0.04 * min(float(row["scheduling_class"]), 3.0) + 0.0005 * min(float(row["priority"]), 1000.0)
             gpu_probs.append(float(np.clip(gpu_prob, 0.03, 0.65)))
 
-            if duration_steps[idx] <= 6:
-                resource_intensity = min(float(cpu_frac or 0.02) + float(mem_frac or 0.01), 1.0)
-                duration_steps[idx] = int(np.clip(rng.normal(10 + 18 * resource_intensity, 3), 6, 42))
             duration = duration_steps[idx]
             comm_count = int(np.clip(rng.poisson(1.0 + min(duration, 30) / 20.0), 0, min(6, duration)))
             comm_counts.append(comm_count)
@@ -185,9 +214,8 @@ def generate_google_dataset(input_path, output_path, limit=2340, chunksize=50_00
                 decline = rng.integers(24, 97)
             declines.append(int(decline))
 
-        gpu_mask = rng.random(len(chunk)) < np.array(gpu_probs)
-        gpu_amount = np.where(gpu_mask, rng.choice(np.arange(50, 251, 50), size=len(chunk)), 0)
-        gpu_type = np.where(gpu_mask, rng.choice(GPU_TYPES[1:], size=len(chunk)), "MISC")
+        gpu_amount = rng.integers(int(HOST_GPU * 0.05) // 10, int(HOST_GPU * 0.25) // 10 + 1, size=len(chunk)) * 10
+        gpu_type = np.full(len(chunk), "MISC", dtype=object)
 
         if time_slots is not None and time_slots > 1:
             submit_time = np.floor((submit_source - base_time) / time_span * (time_slots - 1)).astype(int)
@@ -222,6 +250,9 @@ def generate_google_dataset(input_path, output_path, limit=2340, chunksize=50_00
         out.to_csv(output_path, mode="a", index=False, header=written == 0)
         written += len(out)
 
+    if write_splits and written > 0:
+        write_train_test_splits(output_path)
+
     return written
 
 
@@ -229,13 +260,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default="./borg_traces_data.csv")
     parser.add_argument("--output", default="./google.csv")
-    parser.add_argument("--limit", type=int, default=2340)
+    parser.add_argument("--limit", type=int, default=DEFAULT_TASKS)
     parser.add_argument("--chunksize", type=int, default=50_000)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--time-slots", type=int, default=432)
+    parser.add_argument("--time-slots", type=int, default=DEFAULT_DAYS * SLOTS_PER_DAY)
+    parser.add_argument("--no-splits", action="store_true")
     args = parser.parse_args()
 
-    rows = generate_google_dataset(args.input, args.output, args.limit, args.chunksize, args.seed, args.time_slots)
+    rows = generate_google_dataset(args.input, args.output, args.limit, args.chunksize, args.seed, args.time_slots, not args.no_splits)
     print(f"saved {args.output}, rows={rows}")
 
 
