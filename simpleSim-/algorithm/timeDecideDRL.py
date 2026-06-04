@@ -91,10 +91,7 @@ class timeDecideDRL():
         cur_step_assign_num = 0
         done = False
         for i, task in enumerate(tasks_to_schedule):  # 可选的主机列表
-            time_mask = np.zeros(144, dtype=bool)
-            decline_limit = int(min(task.decline, 143))
-            for i in range(decline_limit+1):
-                time_mask[i] = 1
+            time_mask = env.get_time_action_mask(task, max_slots=144)
 
             if np.sum(time_mask) == 0:  # 没有可分配的主机
                 # print(f"current time: {env.current_time}, No available host for task {task.task_name}")
@@ -107,7 +104,7 @@ class timeDecideDRL():
 
             action, a_logprob = self.agent.get_action(state, action_space, self.is_training,
                                                       eps=self.epsilon)  # get_action
-            if action > task.decline:
+            if action > env.remaining_decline(task):
                 delay = 0
             else:
                 delay = 1
