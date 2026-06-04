@@ -156,6 +156,7 @@ class SchedulingEnv(gym.Env):
 
         # 设置通信时间点
         task.communication_times = [task.start_time+t for t in task.communication_times]
+        return True
 
     # 推进时间步，执行任务
     # 若任务执行完成，释放资源
@@ -227,6 +228,18 @@ class SchedulingEnv(gym.Env):
     def if_done(self):
         completed_tasks = sum(task.is_completed(self.current_time) for task in self.tasks)
         return completed_tasks == Task.total_tasks
+
+    def remaining_decline(self, task, start_time=None):
+        if start_time is None:
+            start_time = self.current_time
+        return int(task.decline) - (int(start_time) - int(task.submit_time))
+
+    def get_time_action_mask(self, task, max_slots=144):
+        time_mask = np.zeros(max_slots, dtype=bool)
+        decline_limit = min(self.remaining_decline(task), max_slots - 1)
+        if decline_limit >= 0:
+            time_mask[:int(decline_limit) + 1] = True
+        return time_mask
 
     def get_tasks_to_schedule(self):
         # 获取当前时间需要调度的任务: 提交时间小于当前时间，且未开始执行

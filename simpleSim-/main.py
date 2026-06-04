@@ -18,6 +18,19 @@ TASK_COLUMNS = [
     'communicate_size', 'decline'
 ]
 
+def ensure_decline_column(workload_df):
+    if 'decline' in workload_df.columns:
+        workload_df['decline'] = pd.to_numeric(workload_df['decline'], errors='coerce').fillna(8).clip(8, 24).astype(int)
+        return workload_df
+
+    duration = pd.to_numeric(workload_df['task_duration'], errors='coerce').fillna(1).clip(lower=1)
+    communicate_count = pd.to_numeric(workload_df.get('communicate_count', 0), errors='coerce').fillna(0).clip(lower=0)
+    job_codes = pd.factorize(workload_df['job_name'])[0]
+    task_codes = pd.factorize(workload_df['task_name'])[0]
+    decline = 8 + ((duration.astype(int) + communicate_count.astype(int) * 3 + job_codes * 7 + task_codes * 11) % 17)
+    workload_df['decline'] = decline.astype(int)
+    return workload_df
+
 # 环境py38torch
 
 def main(args):
@@ -30,7 +43,7 @@ def main(args):
     logging.getLogger().addHandler(file_handler)
     
     # 读取数据
-    workload_df = pd.read_csv(args.workload_path)
+    workload_df = ensure_decline_column(pd.read_csv(args.workload_path))
     host_df = pd.read_csv(args.host_path)
 
     # 创建任务和主机对象
