@@ -651,7 +651,15 @@ class SchedulingEnv(gym.Env):
         flag = True
         for task in tasks_to_schedule:
             for parent_name in task.parent_tasks:
-                parent_task = self.task_dict[parent_name]
+                parent_task = self.task_dict.get(parent_name)
+                if parent_task is None:
+                    logging.warning(
+                        "Parent task %s of %s is absent from current workload; "
+                        "treating it as an external completed dependency.",
+                        parent_name,
+                        getattr(task, "task_name", task),
+                    )
+                    continue
                 if not parent_task.is_completed(self.current_time):
                     flag = False
                     break
