@@ -26,6 +26,29 @@ class FirstFit():
         state = None  # 返回啥都没关系
         done = False
         return state, reward, done, info
+
+class FCFS():
+    def __init__(self):
+        pass
+
+    def placement(self, tasks_to_schedule, env, init_state):
+        task_host_pairs = {}
+        hosts = sorted(env.hosts, key=lambda host: host.host_id)
+        tasks = sorted(tasks_to_schedule, key=lambda task: (task.submit_time, task.task_name))
+        for task in tasks:
+            for host in hosts:
+                if host.placement_possible(task):
+                    task_host_pairs[task] = host
+                    env.task_assignment(task, host)
+                    break
+
+        undeployed_tasks = [task for task in tasks_to_schedule if task not in task_host_pairs]
+        info = {'assign_num': len(task_host_pairs), 'task_host_pairs': task_host_pairs, 'undeployed_tasks': undeployed_tasks}
+
+        reward = 0
+        state = None
+        done = False
+        return state, reward, done, info
     
 # 轮询（接上一次的继续选）
 class RoundRobin():

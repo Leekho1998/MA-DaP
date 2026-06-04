@@ -32,9 +32,15 @@ def main(args):
     job_names = workload_df['job_name'].unique()
     jobs = {job_name: Job(job_name) for job_name in job_names}
     tasks = []
+    task_fields = [
+        'job_name', 'submit_time', 'task_name', 'task_duration', 'instance_num',
+        'plan_cpu', 'plan_mem', 'plan_gpu', 'gpu_type', 'communicate_count',
+        'communicate_size', 'decline',
+    ]
     for _, row in workload_df.iterrows():
         job = jobs[row['job_name']]
-        task = Task(job, **row.to_dict())
+        task_kwargs = {field: row[field] for field in task_fields}
+        task = Task(job, **task_kwargs)
         tasks.append(task)
         job.add_task(task)
 
@@ -69,9 +75,9 @@ if __name__ == '__main__':
     """
     parser = argparse.ArgumentParser(description='Schedule System')
     parser.add_argument('--algorithm_name', type=str,
-                        default='DQN',
+                        default='FCFS',
                         choices=['DQN', 'SAC', 'PPO_Discrete',
-                                 'FirstFit', 'RoundRobin', 'PerformenceFirst', 'PerformenceLast', 'RandomSchedule'],  
+                                 'FCFS', 'FirstFit', 'RoundRobin', 'PerformenceFirst', 'PerformenceLast', 'RandomSchedule'],  
                         help='Name of the algorithm.')  
     parser.add_argument('--reward_name', type=str,
                         default='et_balance',
@@ -82,11 +88,20 @@ if __name__ == '__main__':
                         choices=['FirstSubmit', 'LongFirst', 'ShortFirst'],
                         help='Method to sort tasks before placement.')
     parser.add_argument('--workload_path', type=str,
-                        default='./dataset/workload_ali2025.csv',
-                        choices=['./dataset/workload.csv', './dataset/workload_ali2025.csv','./dataset/workload_decline.csv','./dataset/output.csv'],
+                        default='./dataset/google.csv',
+                        choices=[
+                            './dataset/workload.csv',
+                            './dataset/workload_ali2025.csv',
+                            './dataset/workload_decline.csv',
+                            './dataset/output.csv',
+                            './dataset/google.csv',
+                            './dataset/google_train.csv',
+                            './dataset/google_test.csv',
+                            './dataset/google_sample.csv',
+                        ],
                         help='Path to workload dataset.')
     parser.add_argument('--host_path', type=str,
-                        default='./dataset/host.csv',
+                        default='./dataset/host_same.csv',
                         help='Path to host dataset.')
     parser.add_argument('--log_path', type=str,
                         default='./log/',

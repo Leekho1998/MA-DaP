@@ -4,11 +4,12 @@ from tqdm import tqdm
 
 from algorithm.mydrl import myDRL
 from algorithm.timeDecideDRL import timeDecideDRL
-from algorithm.heuristic_algo import FirstFit, RoundRobin, PerformenceFirst, RandomSchedule
+from algorithm.heuristic_algo import FCFS, FirstFit, RoundRobin, PerformenceFirst, RandomSchedule
 from sort_algo import sort_tasks
 
 # 启发式调度算法
 HEURISTIC_DICT = { 
+    'FCFS': FCFS(),
     'FirstFit': FirstFit(),
     'RoundRobin': RoundRobin(),
     'PerformenceFirst': PerformenceFirst(ifreverse=True),
