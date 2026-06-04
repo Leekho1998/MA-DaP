@@ -234,6 +234,18 @@ class SchedulingEnv(gym.Env):
         completed_tasks = sum(task.is_completed(self.current_time) for task in self.tasks)
         return completed_tasks == Task.total_tasks
 
+    def remaining_decline(self, task, start_time=None):
+        if start_time is None:
+            start_time = self.current_time
+        return int(task.decline) - (int(start_time) - int(task.submit_time))
+
+    def get_time_action_mask(self, task, max_slots=144):
+        time_mask = np.zeros(max_slots, dtype=bool)
+        decline_limit = min(self.remaining_decline(task), max_slots - 1)
+        if decline_limit >= 0:
+            time_mask[:int(decline_limit) + 1] = True
+        return time_mask
+
     def get_tasks_to_schedule(self):
         # 获取当前时间需要调度的任务: 提交时间小于当前时间，且未开始执行
         return [task for task in self.tasks if task.submit_time <= self.current_time and task.start_time is None and task.exc_time is None]

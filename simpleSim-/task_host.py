@@ -31,10 +31,11 @@ class Task:
         self.gpu_type = gpu_type
         self.communicate_count = communicate_count #  通信次数
         self.communicate_size = communicate_size     # 通信数据量
-        self.decline = decline
+        self.decline = int(decline)
         self.start_time = None
         self.end_time = None
         self.assigned_host = None
+        self.exc_time = None
         self.exc_time = None
         # self.communication_tasks = []   # 与之通信的任务队列
         self.communication_times = []   # 通信时间队列
