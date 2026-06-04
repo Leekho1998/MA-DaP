@@ -44,27 +44,20 @@ class DrlModel():
 
                 # 获取要调度的任务
                 tasks_to_schedule = self.env.get_tasks_to_schedule()
-                # if len(tasks_to_schedule) > 0:
-                #     tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule)
-                #     self.algorithm_timeDecide.timeDecide(tasks_to_schedule, self.env, state)
-                dagQueue = self.env.toDAG(tasks_to_schedule)
-                ## dag={'job_name':[task1,task2,...],...}
-                # tasks_to_execute = self.env.get_tasks_to_execute()
-
                 tasks_to_schedule = self.env.isqualified(tasks_to_schedule)
-                
-                if len(tasks_to_schedule) > 0:  # 有任务需要调度
-                    tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule) # 对任务的排序 输入是任务列表，输出是排序后的任务列表
-                    # 调度并执行任务
-                    # 传入的这个state没有一点作用，拿到的state也没有用
-                    #time_decide
-                    state, reward, done, info = self.algorithm.placement(tasks_to_schedule, self.env, state)  # 输入是排序后的任务,
-                    assign_num += info['assign_num']
-                    if assign_num % 10 == 0: # 更新衰减
-                        self.algorithm.decay_epsilon()
-                        # self.algorithm_timeDecide.decay_epsilon()
+                if len(tasks_to_schedule) > 0:
+                    tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule)
+                    self.algorithm_timeDecide.timeDecide(tasks_to_schedule, self.env, state)
 
-                    # 避免除以0
+                tasks_to_execute = self.env.get_tasks_to_execute()
+                if len(tasks_to_execute) > 0:
+                    tasks_to_execute = sort_tasks(self.sort_name, tasks_to_execute)
+                    state, reward, done, info = self.algorithm.placement(tasks_to_execute, self.env, state)
+                    assign_num += info['assign_num']
+                    if assign_num % 10 == 0: # decay
+                        self.algorithm.decay_epsilon()
+                        self.algorithm_timeDecide.decay_epsilon()
+
                     avg_reward = reward if info['assign_num']==0 else reward/info['assign_num']
                     logging.info("time: {}, total reward: {}, assign_num: {}, avg reward: {}".format(self.env.current_time, reward, info['assign_num'], avg_reward))
                     total_reward += reward
@@ -72,9 +65,6 @@ class DrlModel():
                         logging.info(f"undeployed tasks len: {len(info['undeployed_tasks'])}")
                 else:
                     print("No tasks to schedule at current time: {}".format(self.env.current_time))
-
-
-                # 需要往前推进一个时间步
 
                 state, reward, done, info = self.env.normal_step()    # 这4个信息并不会影响任何东西
                 # 放置一步完成后
@@ -111,13 +101,16 @@ class DrlModel():
             # 获取要调度的任务
             tasks_to_schedule = self.env.get_tasks_to_schedule()
             tasks_to_schedule = self.env.isqualified(tasks_to_schedule)
-            if len(tasks_to_schedule) > 0:  # 有任务需要调度
-                tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule) # 对任务的排序 输入是任务列表，输出是排序后的任务列表
-                # 调度并执行任务
-                state, reward, done, info = self.algorithm.placement(tasks_to_schedule, self.env, state)  # 输入是排序后的任务,里面自带时间步推进
+            if len(tasks_to_schedule) > 0:
+                tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule)
+                self.algorithm_timeDecide.timeDecide(tasks_to_schedule, self.env, state)
+
+            tasks_to_execute = self.env.get_tasks_to_execute()
+            if len(tasks_to_execute) > 0:
+                tasks_to_execute = sort_tasks(self.sort_name, tasks_to_execute)
+                state, reward, done, info = self.algorithm.placement(tasks_to_execute, self.env, state)
 
                 assign_num += info['assign_num']
-                # 避免除以0
                 avg_reward = reward if info['assign_num']==0 else reward/info['assign_num']
                 logging.info("time: {}, total reward: {}, assign_num: {}, avg reward: {}".format(self.env.current_time, reward, info['assign_num'], avg_reward))
                 total_reward += reward
@@ -126,6 +119,7 @@ class DrlModel():
 
             # 需要往前推进一个时间步
             state, reward, done, info = self.env.normal_step()  
+            _ = self.algorithm_timeDecide.settle_started_tasks(self.env)
             logging.info(f"done:{done}")
 
         avg_reward = total_reward/assign_num if assign_num!=0 else 0
@@ -145,6 +139,7 @@ class HeuristicModel():
         self.env = env
         
         self.algorithm = HEURISTIC_DICT[algorithm_name]
+        self.algorithm_timeDecide = timeDecideDRL('PPO_Discrete', is_training=False)
 
     def learn(self, episode):  # 启发式算法不需要episode参数
         state = self.env.reset()
@@ -155,16 +150,21 @@ class HeuristicModel():
             # 获取要调度的任务
             tasks_to_schedule = self.env.get_tasks_to_schedule()
             tasks_to_schedule = self.env.isqualified(tasks_to_schedule)
-            if len(tasks_to_schedule) > 0:  # 有任务需要调度
-                tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule) # 对任务的排序 输入是任务列表，输出是排序后的任务列表
-                # 调度并执行任务 
-                state, reward, done, info = self.algorithm.placement(tasks_to_schedule, self.env, state)  # 输入是排序后的任务 里面没有时间步推进
+            if len(tasks_to_schedule) > 0:
+                tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule)
+                self.algorithm_timeDecide.timeDecide(tasks_to_schedule, self.env, state)
+
+            tasks_to_execute = self.env.get_tasks_to_execute()
+            if len(tasks_to_execute) > 0:
+                tasks_to_execute = sort_tasks(self.sort_name, tasks_to_execute)
+                state, reward, done, info = self.algorithm.placement(tasks_to_execute, self.env, state)
                 assign_num += info['assign_num']
             else:
                 print("No tasks to schedule at current time: {}".format(self.env.current_time))
 
             # 需要往前推进一个时间步
             state, reward, done, info = self.env.normal_step()  
+            _ = self.algorithm_timeDecide.settle_started_tasks(self.env)
             logging.info(f"done:{done}")
 
         logging.info(f'assign num: {assign_num}')
