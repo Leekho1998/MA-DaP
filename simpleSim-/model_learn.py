@@ -5,6 +5,7 @@ from tqdm import tqdm
 from algorithm.mydrl import myDRL
 from algorithm.timeDecideDRL import timeDecideDRL
 from algorithm.heuristic_algo import FirstFit, RoundRobin, PerformenceFirst, RandomSchedule
+from algorithm.ecmws import ECMWS
 from sort_algo import sort_tasks
 
 # 启发式调度算法
@@ -13,7 +14,8 @@ HEURISTIC_DICT = {
     'RoundRobin': RoundRobin(),
     'PerformenceFirst': PerformenceFirst(ifreverse=True),
     'RandomSchedule': RandomSchedule(),
-    'PerformenceLast': PerformenceFirst(ifreverse=False)
+    'PerformenceLast': PerformenceFirst(ifreverse=False),
+    'ECMWS': ECMWS()
 }
 
 class DrlModel():
@@ -108,6 +110,7 @@ class DrlModel():
         while not done:
             # 获取要调度的任务
             tasks_to_schedule = self.env.get_tasks_to_schedule()
+            tasks_to_schedule = self.env.isqualified(tasks_to_schedule)
             if len(tasks_to_schedule) > 0:  # 有任务需要调度
                 tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule) # 对任务的排序 输入是任务列表，输出是排序后的任务列表
                 # 调度并执行任务
@@ -151,6 +154,7 @@ class HeuristicModel():
         while not done:
             # 获取要调度的任务
             tasks_to_schedule = self.env.get_tasks_to_schedule()
+            tasks_to_schedule = self.env.isqualified(tasks_to_schedule)
             if len(tasks_to_schedule) > 0:  # 有任务需要调度
                 tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule) # 对任务的排序 输入是任务列表，输出是排序后的任务列表
                 # 调度并执行任务 

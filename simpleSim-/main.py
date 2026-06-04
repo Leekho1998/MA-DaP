@@ -71,7 +71,8 @@ if __name__ == '__main__':
     parser.add_argument('--algorithm_name', type=str,
                         default='DQN',
                         choices=['DQN', 'SAC', 'PPO_Discrete',
-                                 'FirstFit', 'RoundRobin', 'PerformenceFirst', 'PerformenceLast', 'RandomSchedule'],  
+                                 'FirstFit', 'RoundRobin', 'PerformenceFirst', 'PerformenceLast', 'RandomSchedule',
+                                 'ECMWS'],
                         help='Name of the algorithm.')  
     parser.add_argument('--reward_name', type=str,
                         default='et_balance',
@@ -86,6 +87,8 @@ if __name__ == '__main__':
                         choices=[
                             './dataset/workload.csv',
                             './dataset/workload_ali2025.csv',
+                            './dataset/workload_ali2025_train.csv',
+                            './dataset/workload_ali2025_test.csv',
                             './dataset/workload_decline.csv',
                             './dataset/output.csv',
                             './dataset/dag_tasks.csv',
