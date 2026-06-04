@@ -92,9 +92,10 @@ if __name__ == '__main__':
                         choices=['FirstSubmit', 'LongFirst', 'ShortFirst'],
                         help='Method to sort tasks before placement.')
     parser.add_argument('--workload_path', type=str,
-                        default='./dataset/output.csv',
+                        default='./dataset/google.csv',
                         choices=['./dataset/workload.csv', './dataset/workload_ali2025.csv','./dataset/workload_decline.csv','./dataset/output.csv',
                                  './dataset/google.csv',
+                                 './dataset/google_train.csv', './dataset/google_test.csv', './dataset/google_sample.csv',
                                  './dataset/sim_arrival_2.csv', './dataset/sim_arrival_4.csv',
                                  './dataset/sim_arrival_8.csv', './dataset/sim_arrival_10.csv'],
                         help='Path to workload dataset.')
