@@ -9,7 +9,7 @@ import os
 from tqdm import tqdm
 
 from env import SchedulingEnv
-from model_learn import DrlModel, HeuristicModel, HEURISTIC_DICT
+from model_learn import DrlModel, HeuristicModel, GpMarlModel, HEURISTIC_DICT
 from task_host import Task, Host, Job
 
 TASK_COLUMNS = [
@@ -25,22 +25,22 @@ TASK_DEFAULTS = {
     'decline': 72,
 }
 
-# 环境py38torch
+# Environment: py38torch
 
 def main(args):
     os.makedirs(args.log_path, exist_ok=True)
-    # 设置日志文件路径，文件名带上当前时间戳
+    # Log file name includes the current timestamp.
     log_filename = args.log_path+datetime.now().strftime('%Y%m%d_%H%M%S') + '_output.log'
-    # 配置日志，设置编码为 utf-8，防止中文乱码
+    # Keep the file handler in UTF-8 for readable Chinese logs.
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     file_handler = logging.FileHandler(log_filename, encoding='utf-8')
     logging.getLogger().addHandler(file_handler)
     
-    # 读取数据
+    # Load data.
     workload_df = pd.read_csv(args.workload_path)
     host_df = pd.read_csv(args.host_path)
 
-    # 创建任务和主机对象
+    # Build task and host objects.
     Task.total_tasks = 0
     Job.total_jobs = 0
     hosts = [Host(host_id=i, **row.to_dict()) for i, (_, row) in enumerate(host_df.iterrows())]
@@ -54,17 +54,19 @@ def main(args):
         tasks.append(task)
         job.add_task(task)
 
-    # 设置模型
+    # Select model.
     # common config
     algorithm_name = args.algorithm_name
     reward_strategy = args.reward_name
     sort_name = args.sort_name
 
-    # 初始化环境
+    # Initialize environment.
     env = SchedulingEnv(tasks, hosts, reward_strategy)
 
     model = None
-    if algorithm_name in HEURISTIC_DICT.keys():         # 启发式
+    if algorithm_name == 'GP-MARL':
+        model = GpMarlModel(env, sort_name, iftraining=True)
+    elif algorithm_name in HEURISTIC_DICT.keys():
         model = HeuristicModel(env, algorithm_name, sort_name)
         args.episode = 1
     else:

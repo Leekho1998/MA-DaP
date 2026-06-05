@@ -34,7 +34,6 @@ class Task:
         self.end_time = None
         self.assigned_host = None
         self.exc_time = None
-        self.exc_time = None
         # self.communication_tasks = []   # 与之通信的任务队列
         self.communication_times = []   # 通信时间队列
         Task.total_tasks += 1
@@ -52,6 +51,7 @@ class Task:
         self.start_time = None
         self.end_time = None
         self.assigned_host = None
+        self.exc_time = None
     
     # 相关联的容器是否至少有一个被部署过
     @property

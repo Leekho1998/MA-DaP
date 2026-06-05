@@ -15,7 +15,6 @@ HEURISTIC_DICT = {
     'PerformenceFirst': PerformenceFirst(ifreverse=True),
     'RandomSchedule': RandomSchedule(),
     'PerformenceLast': PerformenceFirst(ifreverse=False),
-    'GP-MARL': GPMARL(),
 }
 
 class DrlModel():
@@ -138,6 +137,84 @@ class DrlModel():
         self.env.print_statistics()
 
         return self.env.normalize_total_energy, self.env.normalize_avg_run_time
+
+class GpMarlModel():
+    """GP-MARL trains independent PPO agents over shared job slots."""
+
+    def __init__(self, env, sort_name, iftraining=True):
+        self.sort_name = sort_name
+        self.env = env
+        self.algorithm = GPMARL(is_training=iftraining)
+
+    def learn(self, episode):
+        best_reward = float("-inf")
+        for i in tqdm(range(episode)):
+            logging.info("GP-MARL Episode: {}".format(i))
+            state = self.env.reset()
+            done = False
+            total_reward = 0.0
+            assign_num = 0
+
+            while not done:
+                tasks_to_schedule = self.env.get_tasks_to_schedule()
+                if len(tasks_to_schedule) > 0:
+                    tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule)
+                    state, reward, done, info = self.algorithm.placement(
+                        tasks_to_schedule, self.env, state
+                    )
+                    assign_num += info["assign_num"]
+                    total_reward += reward
+                    if len(info["undeployed_tasks"]) > 0:
+                        logging.info(f"undeployed tasks len: {len(info['undeployed_tasks'])}")
+                else:
+                    print("No jobs to schedule at current time: {}".format(self.env.current_time))
+
+                state, reward, done, info = self.env.normal_step()
+                logging.info(f"done:{done}")
+
+            self.algorithm.finish_episode()
+            avg_reward = total_reward / assign_num if assign_num != 0 else total_reward
+            logging.info(f"assign num: {assign_num}, avg_reward of GP-MARL episode {i}: {avg_reward}")
+            if avg_reward > best_reward:
+                best_reward = avg_reward
+                self.algorithm.save()
+
+            self.env.render()
+            self.env.print_statistics()
+
+        best_F, best_step, best_avg_run_time, best_avg_wait_time, best_energy = self.env.get_best_result()
+        logging.info(f'best F:{best_F}')
+        logging.info(f'best_step:{best_step}')
+        logging.info(f'best_avg_run_time:{best_avg_run_time}')
+        logging.info(f'best_avg_wait_time:{best_avg_wait_time}')
+        logging.info(f'best_energy:{best_energy}')
+        self.algorithm.save()
+
+    def test(self):
+        self.algorithm.is_training = False
+        state = self.env.reset()
+        done = False
+        assign_num = 0
+
+        while not done:
+            tasks_to_schedule = self.env.get_tasks_to_schedule()
+            if len(tasks_to_schedule) > 0:
+                tasks_to_schedule = sort_tasks(self.sort_name, tasks_to_schedule)
+                state, reward, done, info = self.algorithm.placement(
+                    tasks_to_schedule, self.env, state
+                )
+                assign_num += info["assign_num"]
+            else:
+                print("No jobs to schedule at current time: {}".format(self.env.current_time))
+
+            state, reward, done, info = self.env.normal_step()
+            logging.info(f"done:{done}")
+
+        logging.info(f'assign num: {assign_num}')
+        self.env.render()
+        self.env.print_statistics()
+        return self.env.normalize_total_energy, self.env.normalize_avg_run_time
+
 
 class HeuristicModel():
     def __init__(self, env, algorithm_name, sort_name):
