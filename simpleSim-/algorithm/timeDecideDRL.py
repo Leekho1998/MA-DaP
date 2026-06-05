@@ -41,9 +41,10 @@ algo_agents = {
 class _Voucher:
     """记录 t0 的时延决策，在任务真正开始（τ）时一次性结算反事实差分奖励。"""
     __slots__ = ("task_key","state","next_state","action","decide_time",
-                 "baseline_slot","delay_slots","logp","val","mask","settled")
+                 "baseline_slot","delay_slots","active_delay_slots",
+                 "logp","val","mask","settled")
     def __init__(self, task_key, state, next_state, action, decide_time,
-                 baseline_slot, delay_slots, logp, val, mask):
+                 baseline_slot, delay_slots, active_delay_slots, logp, val, mask):
         self.task_key = task_key
         self.state = state
         self.next_state = next_state
@@ -51,6 +52,7 @@ class _Voucher:
         self.decide_time = int(decide_time)
         self.baseline_slot = int(baseline_slot)  # 基线：立刻开始
         self.delay_slots = int(delay_slots)      # a
+        self.active_delay_slots = float(active_delay_slots)
         self.logp = 0.0 if logp is None else float(logp)
         self.val  = 0.0 if val  is None else float(val)
         self.mask = None if mask is None else mask
@@ -130,6 +132,7 @@ class timeDecideDRL():
                 decide_time=t0,
                 baseline_slot=t0,
                 delay_slots=int(action),
+                active_delay_slots=env.reward_Func.effective_active_delay(env, task, int(action)),
                 logp=a_logprob,   # 若你的 PPO 返回的是 log_prob
                 val=0.0,
                 mask=None
@@ -174,11 +177,14 @@ class timeDecideDRL():
             tau = int(task.start_time)
             d   = int(task.task_duration)  # 你的任务时长字段名称若是 duration，请改成 duration
             # 统一账本：边际功率 × 电价
-            actual   = float(env.marginal_task_cost(task, start_time=tau,            duration=d))
-            baseline = float(env.marginal_task_cost(task, start_time=v.baseline_slot, duration=d))
-            diff = baseline - actual
-            wait_pen = self.lambda_wait * (float(v.delay_slots) / 144.0)
-            r_time = diff - wait_pen
+            r_time = env.reward_Func.delay_reward(
+                env,
+                task,
+                baseline_start=v.baseline_slot,
+                actual_start=tau,
+                delay_slots=v.delay_slots,
+                effective_delay_slots=v.active_delay_slots,
+            )
 
             # push 到对应算法的 buffer（与原 push 形参一致）
             # PPO_Discrete：按你的 ppo buffer push 签名

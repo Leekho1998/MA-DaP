@@ -113,6 +113,8 @@ class SchedulingEnv(gym.Env):
         return state, reward, done, info  # 这个函数的这四个值不会影响任何东西，但我还是返回了，相当于返回了一些可供参考的信息吧
 
     def schedule_step(self, task, chosen_host, host_mask, action):
+        placement_context = self.reward_Func.placement_context(self.hosts, task)
+        self._last_placement_context = placement_context
         # len(tasks_to_schedule) > 0才会进入,只会被强化学习算法调用
         if action == 40:
             assign_flag = False
@@ -475,7 +477,7 @@ class SchedulingEnv(gym.Env):
     def get_reward(self, task, chosen_host, assign_flag, time_cost, energy_cost, dw=0, done=0):
         hosts = self.hosts
         if self.reward_strategy == 'my_reward':  
-            return self.reward_Func.my_reward(hosts, task, chosen_host, assign_flag,self)
+            return self.reward_Func.my_reward(hosts, task, chosen_host, assign_flag,self, context=getattr(self, "_last_placement_context", None))
         elif self.reward_strategy == 'time_only':
             return self.reward_Func.time_only(time_cost, assign_flag, self.tasks, done)
         elif self.reward_strategy == 'energy_only':

@@ -14,6 +14,12 @@ class RewardFunc:
         self.w2 = 0.5
 
         self.max_avg_time = 0
+        self.price_reward_scale = 100.0
+        self.lambda_active_delay = 0.02
+        self.lambda_shortage_wait = 0.02
+        self.beta_energy = 0.01
+        self.beta_runtime = 0.05
+        self.lambda_fragment = 0.02
 
     def reset(self):
         self.last_end_time = 0
@@ -22,6 +28,87 @@ class RewardFunc:
     def set_params(self, w1, w2):
         self.w1 = w1
         self.w2 = w2
+
+    def _duration(self, task, host=None):
+        if task.start_time is not None and task.end_time is not None:
+            return max(1.0, float(task.end_time - task.start_time))
+        speed = float(getattr(host, "cpu_speed", 1.0) or 1.0)
+        return max(1.0, float(task.task_duration) / speed)
+
+    def _task_power(self, env, task, host=None):
+        if host is None:
+            return float(env.marginal_task_power(task))
+        req = np.array(task.resource_request, dtype=np.float32)
+        cap = np.maximum(np.array(host.max_resource, dtype=np.float32), 1.0)
+        util = np.clip(req / cap, 0.0, 1.0)
+        vec = np.array([5, 2, 3], dtype=np.float32)
+        dynamic = max(float(getattr(host, "full", 0.0) - getattr(host, "idle", 0.0)), 0.0)
+        return float(getattr(host, "idle", 0.0) + dynamic * (np.dot(util, vec) / np.sum(vec)))
+
+    def _cluster_shortage(self, env, task):
+        available = np.zeros(3, dtype=np.float32)
+        for host in env.hosts:
+            available += np.array([host.cpu, host.mem, host.gpu], dtype=np.float32)
+        return bool(np.any(available < np.array(task.resource_request, dtype=np.float32)))
+
+    def _any_host_feasible(self, env, task):
+        return any(host.placement_possible(task) for host in env.hosts)
+
+    def effective_active_delay(self, env, task, delay_slots):
+        if delay_slots <= 0:
+            return 0.0
+        return float(delay_slots if self._any_host_feasible(env, task) else 0.0)
+
+    def placement_context(self, hosts, task):
+        has_single_host = any(host.placement_possible(task) for host in hosts)
+        total_available = np.zeros(3, dtype=np.float32)
+        for host in hosts:
+            total_available += np.array([host.cpu, host.mem, host.gpu], dtype=np.float32)
+        has_global_capacity = bool(np.all(total_available >= np.array(task.resource_request, dtype=np.float32)))
+        return {
+            "has_single_host": has_single_host,
+            "has_global_capacity": has_global_capacity,
+        }
+
+    def delay_reward(self, env, task, baseline_start, actual_start, delay_slots,
+                     effective_delay_slots=None):
+        duration = int(np.ceil(self._duration(task, getattr(task, "assigned_host", None))))
+        actual_cost = float(env.marginal_task_cost(task, int(actual_start), duration))
+        baseline_cost = float(env.marginal_task_cost(task, int(baseline_start), duration))
+        cost_gain = (baseline_cost - actual_cost) / self.price_reward_scale
+
+        if effective_delay_slots is None:
+            effective_delay_slots = self.effective_active_delay(env, task, delay_slots)
+        planned_start = int(baseline_start) + int(delay_slots)
+        passive_wait = max(0.0, float(actual_start) - float(planned_start))
+        shortage_wait = passive_wait if self._cluster_shortage(env, task) else 0.0
+
+        return (
+            cost_gain
+            - self.lambda_active_delay * float(effective_delay_slots)
+            - self.lambda_shortage_wait * float(shortage_wait)
+        )
+
+    def placement_reward(self, hosts, task, result_host, assign_flag, env, context=None):
+        if not assign_flag or result_host is None:
+            return -1.0
+
+        runtime = self._duration(task, result_host)
+        energy = self._task_power(env, task, result_host) * runtime
+        runtime_norm = runtime / max_time_cost
+        energy_norm = energy / max_energy_cost
+
+        if context is None:
+            context = self.placement_context(hosts, task)
+        has_single_host = bool(context["has_single_host"])
+        has_global_capacity = bool(context["has_global_capacity"])
+        fragment_wait = 1.0 if (not has_single_host and has_global_capacity) else 0.0
+
+        return (
+            -self.beta_energy * energy_norm
+            -self.beta_runtime * runtime_norm
+            -self.lambda_fragment * fragment_wait
+        )
 
     # def time_only(self, time_cost, assign_flag):
     #     reward = 0
@@ -218,23 +305,5 @@ class RewardFunc:
                max_speed = max(max_speed, sum(host.speed))
             reward += sum(result_host.speed) / max_speed * 0.1
             return reward
-    def my_reward(self, hosts, task, result_host, assign_flag,env,signal = 1):
-        if signal == 1:
-            p = env.getNowPrice()
-            price_diviation = 0.5
-            price_bias = (p - price_diviation)/price_diviation
-            if assign_flag:
-                if p == 0.23:
-                    return 1
-                else:
-                    return -10
-            else:
-                if p == 0.23:
-                    return -1
-                else:
-                    return 10
-        else:
-            if assign_flag:
-                return 1
-            else:
-                return -10
+    def my_reward(self, hosts, task, result_host, assign_flag,env,signal = 1, context=None):
+        return self.placement_reward(hosts, task, result_host, assign_flag, env, context=context)
