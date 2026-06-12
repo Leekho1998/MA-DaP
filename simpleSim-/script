@@ -1,2 +1,2 @@
 python main.py --algorithm_name FirstFit --workload_path ./dataset/output.csv --host_path ./dataset/host_same.csv
-python main.py  --workload_path ./dataset/output.csv --host_path ./dataset/host_same.csv
+python main.py  --workload_path ./dataset/googel.csv --host_path ./dataset/host_same.csv
